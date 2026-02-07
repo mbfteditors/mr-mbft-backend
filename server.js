@@ -1,59 +1,60 @@
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
+import knowledge from "./data/mbft_knowledge.json" assert { type: "json" };
 
 const app = express();
-
-/* ===============================
-   MIDDLEWARE
-   =============================== */
 app.use(cors());
 app.use(express.json());
 
-/* ===============================
-   CHAT ENDPOINT
-   =============================== */
+function getContext(question) {
+  const q = question.toLowerCase();
+
+  if (q.includes("mbft")) {
+    return knowledge.find(k => k.source === "mbft.in")?.content;
+  }
+
+  if (q.includes("mohun bagan")) {
+    return knowledge.find(k => k.source === "wikipedia")?.content;
+  }
+
+  return null;
+}
+
 app.post("/chat", async (req, res) => {
+  const message = req.body.message;
+
+  const context = getContext(message);
+
+  if (!context) {
+    return res.json({
+      reply: "I don’t have verified information on this yet."
+    });
+  }
+
   try {
-    const { message } = req.body;
-
-    if (!message || typeof message !== "string") {
-      return res.json({
-        reply: "Please ask a question related to Mohun Bagan or MBFT."
-      });
-    }
-
-    const openaiResponse = await fetch(
+    const response = await fetch(
       "https://api.openai.com/v1/chat/completions",
       {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
           model: "gpt-3.5-turbo",
-          temperature: 0.2,
+          temperature: 0,
           messages: [
             {
               role: "system",
               content: `
 You are Mr. MBFT, the official AI assistant of MBFT.in.
+Answer ONLY using the context below.
+If the answer is not in the context, say:
+"I don’t have verified information on this yet."
 
-STRICT RULES (MANDATORY):
-1. Answer ONLY when you are 100% sure of the facts.
-2. If you are unsure, incomplete, or lack verified information, reply exactly with:
-   "I don’t have verified information on this yet."
-3. NEVER guess.
-4. NEVER invent facts, names, dates, or events.
-5. NEVER mix assumptions with facts.
-6. Focus ONLY on Mohun Bagan and MBFT-related topics.
-
-TONE:
-- Calm
-- Factual
-- Careful
-- Respectful
+CONTEXT:
+${context}
               `
             },
             {
@@ -65,39 +66,26 @@ TONE:
       }
     );
 
-    const data = await openaiResponse.json();
+    const data = await response.json();
 
-    const reply =
-      data &&
-      data.choices &&
-      data.choices[0] &&
-      data.choices[0].message &&
-      data.choices[0].message.content
-        ? data.choices[0].message.content.trim()
-        : "I don’t have verified information on this yet.";
+    res.json({
+      reply:
+        data?.choices?.[0]?.message?.content ||
+        "I don’t have verified information on this yet."
+    });
 
-    return res.json({ reply });
-
-  } catch (error) {
-    return res.json({
+  } catch {
+    res.json({
       reply: "I don’t have verified information on this yet."
     });
   }
 });
 
-/* ===============================
-   HEALTH CHECK
-   =============================== */
 app.get("/", (req, res) => {
-  res.send("Mr. MBFT backend is running (Strict Knowledge Mode enabled).");
+  res.send("Mr. MBFT backend running (knowledge mode enabled).");
 });
 
-/* ===============================
-   SERVER START
-   =============================== */
 const PORT = process.env.PORT || 10000;
-
 app.listen(PORT, () => {
-  console.log(`Mr. MBFT backend running on port ${PORT}`);
+  console.log("Server running on port " + PORT);
 });
-
