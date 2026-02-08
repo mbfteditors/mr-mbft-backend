@@ -1,48 +1,74 @@
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 /* ===============================
-   LOAD KNOWLEDGE FILE SAFELY
+   LIVE SOURCES (MBFT = TRUTH)
    =============================== */
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const LIVE_SOURCES = {
+  squadHistory: "https://www.mbft.in/2024/01/Mohun-Bagan-Squad-Over-The-Years.html",
+  seniorSquad: "https://www.mbft.in/p/mohun-bagan-squad.html",
+  reserves: "https://www.mbft.in/p/mohun-bagan-squad-2.html",
+  u18: "https://www.mbft.in/p/mohun-bagan-squad-3.html",
+  u16: "https://www.mbft.in/p/mohun-bagan-squad-4.html",
+  u14: "https://www.mbft.in/p/mohun-bagan-squad-5.html",
+  matches: "https://www.mbft.in/p/matches.html"
+};
 
-let knowledge = [];
+/* ===============================
+   SIMPLE IN-MEMORY CACHE
+   =============================== */
 
-try {
-  const dataPath = path.join(__dirname, "data", "mbft_knowledge.json");
-  const rawData = fs.readFileSync(dataPath, "utf8");
-  knowledge = JSON.parse(rawData);
-  console.log("Knowledge base loaded successfully");
-} catch (err) {
-  console.error("Failed to load knowledge base", err);
+const CACHE = {};
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+async function fetchWithCache(key, url) {
+  const now = Date.now();
+
+  if (CACHE[key] && now - CACHE[key].time < CACHE_TTL) {
+    return CACHE[key].content;
+  }
+
+  const res = await fetch(url);
+  const html = await res.text();
+
+  const cleanText = html
+    .replace(/<script[^>]*>.*?<\/script>/gs, "")
+    .replace(/<style[^>]*>.*?<\/style>/gs, "")
+    .replace(/<noscript[^>]*>.*?<\/noscript>/gs, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 15000);
+
+  CACHE[key] = {
+    time: now,
+    content: cleanText
+  };
+
+  return cleanText;
 }
 
 /* ===============================
-   SIMPLE CONTEXT MATCHER
+   INTENT DETECTION
    =============================== */
 
-function getContext(question) {
+function detectIntent(question) {
   if (!question) return null;
-
   const q = question.toLowerCase();
 
-  if (q.includes("mbft")) {
-    return knowledge.find(k => k.source === "mbft.in")?.content || null;
-  }
-
-  if (q.includes("mohun bagan")) {
-    return knowledge.find(k => k.source === "wikipedia")?.content || null;
-  }
+  if (q.includes("over the years") || q.includes("history squad")) return "squadHistory";
+  if (q.includes("current squad") || q.includes("senior squad")) return "seniorSquad";
+  if (q.includes("reserve")) return "reserves";
+  if (q.includes("u18")) return "u18";
+  if (q.includes("u16")) return "u16";
+  if (q.includes("u14")) return "u14";
+  if (q.includes("match") || q.includes("fixture") || q.includes("schedule")) return "matches";
 
   return null;
 }
@@ -54,16 +80,18 @@ function getContext(question) {
 app.post("/chat", async (req, res) => {
   const message = req.body.message;
 
-  const context = getContext(message);
+  const intent = detectIntent(message);
 
-  if (!context) {
+  if (!intent || !LIVE_SOURCES[intent]) {
     return res.json({
       reply: "I don’t have verified information on this yet."
     });
   }
 
   try {
-    const response = await fetch(
+    const liveContent = await fetchWithCache(intent, LIVE_SOURCES[intent]);
+
+    const aiResponse = await fetch(
       "https://api.openai.com/v1/chat/completions",
       {
         method: "POST",
@@ -80,14 +108,15 @@ app.post("/chat", async (req, res) => {
               content: `
 You are Mr. MBFT, the official AI assistant of MBFT.in.
 
-RULES:
-- Answer ONLY using the provided context.
-- Do NOT add information outside the context.
-- If the answer is not in the context, say:
+RULES (STRICT):
+- Answer ONLY using the content below.
+- Do NOT guess.
+- Do NOT add information.
+- If information is missing, say:
 "I don’t have verified information on this yet."
 
-CONTEXT:
-${context}
+CONTENT:
+${liveContent}
               `
             },
             {
@@ -99,7 +128,7 @@ ${context}
       }
     );
 
-    const data = await response.json();
+    const data = await aiResponse.json();
 
     return res.json({
       reply:
@@ -108,7 +137,6 @@ ${context}
     });
 
   } catch (err) {
-    console.error(err);
     return res.json({
       reply: "I don’t have verified information on this yet."
     });
@@ -120,7 +148,7 @@ ${context}
    =============================== */
 
 app.get("/", (req, res) => {
-  res.send("Mr. MBFT backend running (knowledge mode enabled)");
+  res.send("Mr. MBFT backend running (Live Squad Fetch + Cache enabled)");
 });
 
 /* ===============================
@@ -128,8 +156,6 @@ app.get("/", (req, res) => {
    =============================== */
 
 const PORT = process.env.PORT || 10000;
-
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
-
