@@ -3,12 +3,13 @@ import cors from "cors";
 import fetch from "node-fetch";
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 
-/* ===============================
-   LIVE SOURCES (MBFT = TRUTH)
-   =============================== */
+/* ==================================================
+   LIVE MBFT SOURCES (SINGLE SOURCE OF TRUTH)
+   ================================================== */
 
 const LIVE_SOURCES = {
   squadHistory: "https://www.mbft.in/2024/01/Mohun-Bagan-Squad-Over-The-Years.html",
@@ -20,12 +21,12 @@ const LIVE_SOURCES = {
   matches: "https://www.mbft.in/p/matches.html"
 };
 
-/* ===============================
-   SIMPLE IN-MEMORY CACHE
-   =============================== */
+/* ==================================================
+   SIMPLE IN-MEMORY CACHE (10 MINUTES)
+   ================================================== */
 
 const CACHE = {};
-const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const CACHE_TTL = 10 * 60 * 1000;
 
 async function fetchWithCache(key, url) {
   const now = Date.now();
@@ -34,13 +35,13 @@ async function fetchWithCache(key, url) {
     return CACHE[key].content;
   }
 
-  const res = await fetch(url);
-  const html = await res.text();
+  const response = await fetch(url);
+  const html = await response.text();
 
-  const cleanText = html
-    .replace(/<script[^>]*>.*?<\/script>/gs, "")
-    .replace(/<style[^>]*>.*?<\/style>/gs, "")
-    .replace(/<noscript[^>]*>.*?<\/noscript>/gs, "")
+  const cleanedText = html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -48,36 +49,37 @@ async function fetchWithCache(key, url) {
 
   CACHE[key] = {
     time: now,
-    content: cleanText
+    content: cleanedText
   };
 
-  return cleanText;
+  return cleanedText;
 }
 
-/* ===============================
-   INTENT DETECTION
-   =============================== */
+/* ==================================================
+   INTENT DETECTION (ROBUST & SAFE)
+   ================================================== */
 
 function detectIntent(question) {
   if (!question) return null;
+
   const q = question.toLowerCase();
 
-  // Explicit historical squad
+  // Squad history
   if (
     q.includes("over the years") ||
-    q.includes("historical squad") ||
+    q.includes("history squad") ||
     q.includes("past squad")
   ) {
     return "squadHistory";
   }
 
-  // Youth & reserves
+  // Youth & reserve squads
   if (q.includes("u18")) return "u18";
   if (q.includes("u16")) return "u16";
   if (q.includes("u14")) return "u14";
   if (q.includes("reserve")) return "reserves";
 
-  // Match schedule
+  // Matches
   if (
     q.includes("match") ||
     q.includes("fixture") ||
@@ -86,7 +88,7 @@ function detectIntent(question) {
     return "matches";
   }
 
-  // Senior squad (explicit)
+  // Explicit senior squad
   if (
     q.includes("current squad") ||
     q.includes("senior squad") ||
@@ -96,8 +98,7 @@ function detectIntent(question) {
     return "seniorSquad";
   }
 
-  // 🔑 FINAL FALLBACK:
-  // Any Mohun Bagan player/team question defaults to senior squad
+  // Default: Mohun Bagan + players/team/squad
   if (
     q.includes("mohun bagan") &&
     (
@@ -113,39 +114,9 @@ function detectIntent(question) {
   return null;
 }
 
-
-  // Youth squads
-  if (q.includes("u18")) return "u18";
-  if (q.includes("u16")) return "u16";
-  if (q.includes("u14")) return "u14";
-  if (q.includes("reserve")) return "reserves";
-
-  // Current / senior squad (DEFAULT)
-  if (
-    q.includes("squad") ||
-    q.includes("team") ||
-    q.includes("players") ||
-    q.includes("current")
-  ) {
-    return "seniorSquad";
-  }
-
-  // Matches
-  if (
-    q.includes("match") ||
-    q.includes("fixture") ||
-    q.includes("schedule")
-  ) {
-    return "matches";
-  }
-
-  return null;
-}
-
-
-/* ===============================
+/* ==================================================
    CHAT ENDPOINT
-   =============================== */
+   ================================================== */
 
 app.post("/chat", async (req, res) => {
   const message = req.body.message;
@@ -159,14 +130,17 @@ app.post("/chat", async (req, res) => {
   }
 
   try {
-    const liveContent = await fetchWithCache(intent, LIVE_SOURCES[intent]);
+    const liveContent = await fetchWithCache(
+      intent,
+      LIVE_SOURCES[intent]
+    );
 
-    const aiResponse = await fetch(
+    const openaiResponse = await fetch(
       "https://api.openai.com/v1/chat/completions",
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -178,11 +152,11 @@ app.post("/chat", async (req, res) => {
               content: `
 You are Mr. MBFT, the official AI assistant of MBFT.in.
 
-RULES (STRICT):
+STRICT RULES:
 - Answer ONLY using the content below.
 - Do NOT guess.
-- Do NOT add information.
-- If information is missing, say:
+- Do NOT add external information.
+- If information is missing, say exactly:
 "I don’t have verified information on this yet."
 
 CONTENT:
@@ -198,7 +172,7 @@ ${liveContent}
       }
     );
 
-    const data = await aiResponse.json();
+    const data = await openaiResponse.json();
 
     return res.json({
       reply:
@@ -206,26 +180,28 @@ ${liveContent}
         "I don’t have verified information on this yet."
     });
 
-  } catch (err) {
+  } catch (error) {
     return res.json({
       reply: "I don’t have verified information on this yet."
     });
   }
 });
 
-/* ===============================
+/* ==================================================
    HEALTH CHECK
-   =============================== */
+   ================================================== */
 
 app.get("/", (req, res) => {
-  res.send("Mr. MBFT backend running (Live Squad Fetch + Cache enabled)");
+  res.send("Mr. MBFT backend running – Live fetch + cache active");
 });
 
-/* ===============================
+/* ==================================================
    START SERVER
-   =============================== */
+   ================================================== */
 
 const PORT = process.env.PORT || 10000;
+
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
+
