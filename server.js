@@ -38,14 +38,25 @@ async function fetchWithCache(key, url) {
   const response = await fetch(url);
   const html = await response.text();
 
-  const cleanedText = html
+  // Extract main article content (Blogger safe)
+  let mainContent = "";
+
+  const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+
+  if (articleMatch && articleMatch[1]) {
+    mainContent = articleMatch[1];
+  } else {
+    mainContent = html; // fallback
+  }
+
+  const cleanedText = mainContent
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
     .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 15000);
+    .slice(0, 20000); // slightly higher for squads
 
   CACHE[key] = {
     time: now,
