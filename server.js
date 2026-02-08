@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
-import cheerio from "cheerio";
+import * as cheerio from "cheerio";
 
 const app = express();
 
@@ -9,7 +9,7 @@ app.use(cors());
 app.use(express.json());
 
 /* =====================================
-   LIVE MBFT SOURCES (TRUSTED)
+   LIVE MBFT SOURCES
    ===================================== */
 
 const LIVE_SOURCES = {
@@ -30,7 +30,7 @@ const CACHE = {};
 const CACHE_TTL = 10 * 60 * 1000;
 
 /* =====================================
-   FETCH + DOM EXTRACTION (BULLETPROOF)
+   FETCH + DOM EXTRACTION (SAFE)
    ===================================== */
 
 async function fetchWithCache(key, url) {
@@ -49,14 +49,14 @@ async function fetchWithCache(key, url) {
 
   let text = "";
 
-  // 1️⃣ Extract normal readable content
+  // Main content
   $(".post-body, .entry-content, .page, .widget-content, article").each(
     (_, el) => {
       text += " " + $(el).clone().find("script,style").remove().end().text();
     }
   );
 
-  // 2️⃣ Extract table-based data (CRITICAL FOR SQUADS)
+  // Tables (critical for squads)
   $("table tr").each((_, row) => {
     const cells = [];
     $(row)
@@ -70,10 +70,8 @@ async function fetchWithCache(key, url) {
     }
   });
 
-  // 3️⃣ Cleanup
   text = text
     .replace(/\s+/g, " ")
-    .replace(/\| \|/g, "|")
     .trim()
     .slice(0, 50000);
 
@@ -86,25 +84,19 @@ async function fetchWithCache(key, url) {
 }
 
 /* =====================================
-   INTENT DETECTION (DOMAIN-AWARE)
+   INTENT DETECTION
    ===================================== */
 
 function detectIntent(question) {
   if (!question) return null;
   const q = question.toLowerCase();
 
-  if (q.includes("over the years") || q.includes("history")) {
-    return "squadHistory";
-  }
-
+  if (q.includes("over the years") || q.includes("history")) return "squadHistory";
   if (q.includes("u18")) return "u18";
   if (q.includes("u16")) return "u16";
   if (q.includes("u14")) return "u14";
   if (q.includes("reserve")) return "reserves";
-
-  if (q.includes("match") || q.includes("fixture") || q.includes("schedule")) {
-    return "matches";
-  }
+  if (q.includes("match") || q.includes("fixture") || q.includes("schedule")) return "matches";
 
   if (
     q.includes("player") ||
@@ -124,7 +116,6 @@ function detectIntent(question) {
 
 app.post("/chat", async (req, res) => {
   const message = req.body?.message || "";
-
   const intent = detectIntent(message);
 
   if (!intent || !LIVE_SOURCES[intent]) {
@@ -159,11 +150,10 @@ app.post("/chat", async (req, res) => {
               content: `
 You are Mr. MBFT, the official AI of MBFT.in.
 
-STRICT RULES:
-- Use ONLY the content below.
+RULES:
+- Answer ONLY using the content below.
 - Do NOT guess.
-- Do NOT add extra knowledge.
-- If information is missing, reply exactly:
+- If information is missing, say:
 "I don’t have verified information on this yet."
 
 CONTENT:
@@ -183,7 +173,8 @@ ${content}
         data?.choices?.[0]?.message?.content ||
         "I don’t have verified information on this yet."
     });
-  } catch (err) {
+
+  } catch {
     return res.json({
       reply: "I don’t have verified information on this yet."
     });
