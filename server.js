@@ -7,9 +7,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* ===============================
-   LINKS
-================================ */
+/* =================================
+   MBFT LINKS (SINGLE SOURCE OF TRUTH)
+================================== */
 
 const LINKS = {
   hidden: "https://www.mbft.in/p/mr-mbft-data.html",
@@ -24,45 +24,49 @@ const LINKS = {
   latest: "https://www.mbft.in"
 };
 
-/* ===============================
-   SAFE CONTENT FETCH
-================================ */
+/* =================================
+   CLEAN & FILTER BLOGGER CONTENT
+================================== */
 
 async function fetchFilteredContent(url) {
-  const res = await fetch(url);
-  const html = await res.text();
-  const $ = cheerio.load(html);
+  try {
+    const res = await fetch(url);
+    const html = await res.text();
+    const $ = cheerio.load(html);
 
-  let raw =
-    $(".post-body").text() ||
-    $(".page-body").text() ||
-    $(".entry-content").text() ||
-    "";
+    let raw =
+      $(".post-body").text() ||
+      $(".page-body").text() ||
+      $(".entry-content").text() ||
+      "";
 
-  raw = raw.replace(/\s+/g, " ").trim();
-  if (!raw || raw.length < 300) return "";
+    raw = raw.replace(/\s+/g, " ").trim();
+    if (!raw || raw.length < 300) return "";
 
-  // 🚫 REMOVE JUNK
-  const bannedWords = [
-    "Home", "Archives", "Era", "MBFT Specials", "Categories",
-    "Subscribe", "Privacy Policy", "Copyright"
-  ];
+    const banned = [
+      "Home", "Archives", "Categories", "MBFT Specials",
+      "Subscribe", "Privacy Policy", "Era", "Copyright"
+    ];
 
-  let lines = raw.split(".").map(l => l.trim());
+    let lines = raw.split(".");
+    lines = lines
+      .map(l => l.trim())
+      .filter(l =>
+        l.length > 20 &&
+        !banned.some(b => l.includes(b))
+      );
 
-  lines = lines.filter(line =>
-    line.length > 20 &&
-    !bannedWords.some(b => line.includes(b))
-  );
-
-  return lines.join(". ");
+    return lines.join(". ") + ".";
+  } catch {
+    return "";
+  }
 }
 
-/* ===============================
-   PLAYER LINE FINDER
-================================ */
+/* =================================
+   FIND PLAYER LINE ONLY
+================================== */
 
-function findPlayer(content, name) {
+function findPlayerLine(content, name) {
   const lines = content.split(".");
   for (const line of lines) {
     if (line.toLowerCase().includes(name.toLowerCase())) {
@@ -72,36 +76,41 @@ function findPlayer(content, name) {
   return null;
 }
 
-/* ===============================
-   CHAT
-================================ */
+/* =================================
+   CHAT ENDPOINT
+================================== */
 
 app.post("/chat", async (req, res) => {
-  const message = (req.body.message || "").trim();
+  const message = (req.body?.message || "").trim();
   const q = message.toLowerCase();
 
-  /* EAST BENGAL */
+  /* EAST BENGAL RULE */
   if (q.includes("east bengal")) {
     return res.json({
       reply: "We don't talk about irrelevant East Bengal here, JOY MOHUN BAGAN 🟢🔴"
     });
   }
 
-  /* ATK */
+  /* ATK RULE */
   if (q.includes("atk")) {
     return res.json({
       reply: "It's 2026 and you are still stuck in 2020 😏"
     });
   }
 
-  /* CURRENT / SENIOR SQUAD */
-  if (
+  /* ===============================
+     CURRENT / SENIOR SQUAD
+  =============================== */
+
+  const isSquadQuery =
     q.includes("current squad") ||
     q.includes("senior squad") ||
     q.includes("mohun bagan squad") ||
     q.includes("current team") ||
-    q.includes("team list")
-  ) {
+    q.includes("team list") ||
+    q.includes("players in mohun bagan");
+
+  if (isSquadQuery) {
     const content = await fetchFilteredContent(LINKS.hidden);
 
     if (content) {
@@ -109,29 +118,46 @@ app.post("/chat", async (req, res) => {
     }
 
     return res.json({
-      reply: `You can view the official Mohun Bagan senior squad here:
+      reply: `You can view the official current Mohun Bagan senior squad here:
 ${LINKS.current}`
     });
   }
 
-  /* PLAYER QUERIES */
-  const who =
+  /* ===============================
+     PLAYER QUESTIONS
+  =============================== */
+
+  const whoMatch =
     message.match(/who is (.+)/i) ||
-    message.match(/did (.+) play/i);
+    message.match(/did (.+) play/i) ||
+    message.match(/has (.+) ever played/i);
 
-  if (who) {
-    const name = who[1].replace("for mohun bagan", "").trim();
+  if (whoMatch) {
+    const name = whoMatch[1]
+      .replace("for mohun bagan", "")
+      .trim();
 
+    // 1️⃣ Check current squad (hidden page)
     let content = await fetchFilteredContent(LINKS.hidden);
-    let found = findPlayer(content, name);
+    let found = findPlayerLine(content, name);
 
-    if (found) return res.json({ reply: found });
+    if (found) {
+      return res.json({
+        reply: `Yes. ${found}`
+      });
+    }
 
+    // 2️⃣ Check all-time squad
     content = await fetchFilteredContent(LINKS.history);
-    found = findPlayer(content, name);
+    found = findPlayerLine(content, name);
 
-    if (found) return res.json({ reply: found });
+    if (found) {
+      return res.json({
+        reply: `Yes. ${found}`
+      });
+    }
 
+    // 3️⃣ Smart redirect
     return res.json({
       reply: `I couldn’t confirm this from verified data.
 You can check the full Mohun Bagan squad history here:
@@ -139,36 +165,62 @@ ${LINKS.history}`
     });
   }
 
-  /* MATCHES */
-  if (q.includes("match") || q.includes("fixture")) {
+  /* ===============================
+     YOUTH & RESERVES
+  =============================== */
+
+  if (q.includes("reserve")) return res.json({ reply: LINKS.reserves });
+  if (q.includes("u18")) return res.json({ reply: LINKS.u18 });
+  if (q.includes("u16")) return res.json({ reply: LINKS.u16 });
+  if (q.includes("u14")) return res.json({ reply: LINKS.u14 });
+
+  /* ===============================
+     MATCHES
+  =============================== */
+
+  if (q.includes("match") || q.includes("fixture") || q.includes("table")) {
     return res.json({ reply: LINKS.matches });
   }
 
-  /* TROPHIES */
-  if (q.includes("trophy")) {
+  /* ===============================
+     TROPHIES
+  =============================== */
+
+  if (q.includes("trophy") || q.includes("titles")) {
     return res.json({ reply: LINKS.trophies });
   }
 
-  /* LATEST */
+  /* ===============================
+     LATEST NEWS
+  =============================== */
+
   if (q.includes("latest") || q.includes("news")) {
     return res.json({
-      reply: `For the latest Mohun Bagan updates:
+      reply: `For the latest Mohun Bagan updates, visit:
 ${LINKS.latest}`
     });
   }
 
+  /* ===============================
+     SAFE FALLBACK
+  =============================== */
+
   return res.json({
-    reply: "Please ask about Mohun Bagan, its squad, players, or history."
+    reply: "Please ask about Mohun Bagan, its squad, players, matches, or history."
   });
 });
 
-/* ===============================
-   HEALTH
-================================ */
+/* =================================
+   HEALTH CHECK
+================================== */
 
 app.get("/", (_, res) => {
-  res.send("Mr. MBFT backend running – clean extraction enabled");
+  res.send("Mr. MBFT backend running – smart intent & clean extraction enabled");
 });
+
+/* =================================
+   START SERVER
+================================== */
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
