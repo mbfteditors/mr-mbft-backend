@@ -12,8 +12,8 @@ app.use(express.json());
 ================================ */
 
 const LINKS = {
-  currentSquad: "https://www.mbft.in/p/mohun-bagan-squad.html",
-  squadHistory: "https://www.mbft.in/2024/01/Mohun-Bagan-Squad-Over-The-Years.html",
+  current: "https://www.mbft.in/p/mohun-bagan-squad.html",
+  history: "https://www.mbft.in/2024/01/Mohun-Bagan-Squad-Over-The-Years.html",
   reserves: "https://www.mbft.in/p/mohun-bagan-squad-2.html",
   u18: "https://www.mbft.in/p/mohun-bagan-squad-3.html",
   u16: "https://www.mbft.in/p/mohun-bagan-squad-4.html",
@@ -24,29 +24,63 @@ const LINKS = {
 };
 
 /* ===============================
-   FETCH & CLEAN ARTICLE BODY
+   SAFE TEXT EXTRACTOR (NO CSS)
 ================================ */
 
-async function fetchArticle(url) {
-  const res = await fetch(url);
-  const html = await res.text();
-  const $ = cheerio.load(html);
+async function fetchCleanText(url) {
+  try {
+    const res = await fetch(url);
+    const html = await res.text();
+    const $ = cheerio.load(html);
 
-  let text =
-    $(".post-body").text() ||
-    $(".page-body").text() ||
-    $(".entry-content").text() ||
-    "";
+    // REMOVE ALL NON-CONTENT
+    $("style, script, noscript, header, footer").remove();
 
-  text = text.replace(/\s+/g, " ").trim();
-  return text;
+    const container =
+      $(".post-body").first().clone() ||
+      $(".page-body").first().clone() ||
+      $(".entry-content").first().clone();
+
+    if (!container || container.length === 0) return "";
+
+    // REMOVE INLINE STYLE ELEMENTS
+    container.find("style, script").remove();
+
+    let text = container.text();
+
+    // FINAL SANITIZATION
+    text = text
+      .replace(/\/\*[\s\S]*?\*\//g, "") // CSS comments
+      .replace(/:\s*#[0-9a-fA-F]{3,6}/g, "")
+      .replace(/\{|\}/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    // HARD BLOCK CSS-LOOKING OUTPUT
+    const cssIndicators = [
+      "--",
+      "font-size",
+      "background",
+      "color:",
+      "padding",
+      "margin"
+    ];
+
+    if (cssIndicators.some(k => text.includes(k))) {
+      return "";
+    }
+
+    return text;
+  } catch {
+    return "";
+  }
 }
 
 /* ===============================
-   TRY TO FIND ANSWER
+   FIND SINGLE SENTENCE
 ================================ */
 
-function findAnswer(text, keyword) {
+function findSentence(text, keyword) {
   const sentences = text.split(".");
   for (const s of sentences) {
     if (s.toLowerCase().includes(keyword.toLowerCase())) {
@@ -81,35 +115,43 @@ app.post("/chat", async (req, res) => {
      PLAYER QUESTIONS
   =============================== */
 
-  const who =
+  const whoMatch =
     message.match(/who is (.+)/i) ||
     message.match(/did (.+) play/i) ||
     message.match(/has (.+) ever played/i);
 
-  if (who) {
-    const name = who[1].replace("for mohun bagan", "").trim();
+  if (whoMatch) {
+    const name = whoMatch[1].replace("for mohun bagan", "").trim();
 
     // Try current squad
-    let text = await fetchArticle(LINKS.currentSquad);
-    let ans = findAnswer(text, name);
+    let text = await fetchCleanText(LINKS.current);
+    let found = findSentence(text, name);
 
-    if (ans) return res.json({ reply: ans });
+    if (found) {
+      return res.json({
+        reply: `Yes. ${found}`
+      });
+    }
 
     // Try history
-    text = await fetchArticle(LINKS.squadHistory);
-    ans = findAnswer(text, name);
+    text = await fetchCleanText(LINKS.history);
+    found = findSentence(text, name);
 
-    if (ans) return res.json({ reply: ans });
+    if (found) {
+      return res.json({
+        reply: `Yes. ${found}`
+      });
+    }
 
-    // Redirect
     return res.json({
-      reply: `You can verify Mohun Bagan player history here:
-${LINKS.squadHistory}`
+      reply: `I couldn’t find a confirmed answer.
+You can check the complete Mohun Bagan squad history here:
+${LINKS.history}`
     });
   }
 
   /* ===============================
-     CURRENT SQUAD / CAPTAIN
+     CURRENT SQUAD / CAPTAIN / COACH
   =============================== */
 
   if (
@@ -119,12 +161,15 @@ ${LINKS.squadHistory}`
     q.includes("captain") ||
     q.includes("coach")
   ) {
-    const text = await fetchArticle(LINKS.currentSquad);
-    if (text) return res.json({ reply: text });
+    const text = await fetchCleanText(LINKS.current);
+
+    if (text) {
+      return res.json({ reply: text });
+    }
 
     return res.json({
-      reply: `View the official current squad here:
-${LINKS.currentSquad}`
+      reply: `You can view the official Mohun Bagan senior squad here:
+${LINKS.current}`
     });
   }
 
@@ -142,8 +187,7 @@ ${LINKS.currentSquad}`
   =============================== */
 
   if (q.includes("match") || q.includes("fixture") || q.includes("table")) {
-    const text = await fetchArticle(LINKS.matches);
-    return res.json({ reply: text || LINKS.matches });
+    return res.json({ reply: LINKS.matches });
   }
 
   /* ===============================
@@ -151,8 +195,7 @@ ${LINKS.currentSquad}`
   =============================== */
 
   if (q.includes("trophy") || q.includes("titles")) {
-    const text = await fetchArticle(LINKS.trophies);
-    return res.json({ reply: text || LINKS.trophies });
+    return res.json({ reply: LINKS.trophies });
   }
 
   /* ===============================
@@ -171,7 +214,7 @@ ${LINKS.latest}`
   =============================== */
 
   return res.json({
-    reply: "Ask me anything related to Mohun Bagan – squad, players, matches or history."
+    reply: "Ask me anything related to Mohun Bagan – squad, players, matches, or history."
   });
 });
 
@@ -180,8 +223,12 @@ ${LINKS.latest}`
 ================================ */
 
 app.get("/", (_, res) => {
-  res.send("Mr. MBFT backend running – try answer first, redirect if needed");
+  res.send("Mr. MBFT backend running – CSS-safe, answer-first mode");
 });
+
+/* ===============================
+   START SERVER
+================================ */
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
