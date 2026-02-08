@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json());
 
 /* ===============================
-   ALL MBFT LINKS
+   MBFT SOURCE LINKS
 ================================ */
 
 const LINKS = {
@@ -25,27 +25,50 @@ const LINKS = {
 };
 
 /* ===============================
-   SIMPLE FETCH + CLEAN TEXT
+   SAFE CONTENT EXTRACTION
 ================================ */
 
-async function fetchPageText(url) {
-  const res = await fetch(url);
-  const html = await res.text();
-  const $ = cheerio.load(html);
-  return $("body").text().replace(/\s+/g, " ").trim();
+async function fetchCleanContent(url) {
+  try {
+    const res = await fetch(url);
+    const html = await res.text();
+    const $ = cheerio.load(html);
+
+    // Blogger-safe content selectors
+    let content =
+      $(".post-body").text() ||
+      $(".page-body").text() ||
+      $(".entry-content").text() ||
+      "";
+
+    content = content.replace(/\s+/g, " ").trim();
+
+    // Reject junk / navigation content
+    if (
+      content.length < 200 ||
+      content.includes("Home MBFT") ||
+      content.includes("Archives") ||
+      content.includes("Era") ||
+      content.includes("Categories")
+    ) {
+      return "";
+    }
+
+    return content;
+  } catch {
+    return "";
+  }
 }
 
 /* ===============================
-   TRY ANSWERING FROM A PAGE
+   SIMPLE FACT LOOKUP
 ================================ */
 
-function tryAnswerFromContent(content, query) {
-  const q = query.toLowerCase();
-  const sentences = content.split(".");
-
-  for (const s of sentences) {
-    if (s.toLowerCase().includes(q)) {
-      return s.trim() + ".";
+function findLine(content, keyword) {
+  const lines = content.split(".");
+  for (const line of lines) {
+    if (line.toLowerCase().includes(keyword.toLowerCase())) {
+      return line.trim() + ".";
     }
   }
   return null;
@@ -85,41 +108,34 @@ app.post("/chat", async (req, res) => {
   if (whoMatch) {
     const name = whoMatch[1].replace("for mohun bagan", "").trim();
 
-    // 1️⃣ Try hidden page first
-    const hiddenText = await fetchPageText(LINKS.hidden);
-    const foundHidden = tryAnswerFromContent(hiddenText, name);
+    // 1️⃣ Hidden page (current squad)
+    let content = await fetchCleanContent(LINKS.hidden);
+    let answer = findLine(content, name);
 
-    if (foundHidden) {
-      return res.json({ reply: foundHidden });
-    }
+    if (answer) return res.json({ reply: answer });
 
-    // 2️⃣ Try all-time squad page
-    const historyText = await fetchPageText(LINKS.history);
-    const foundHistory = tryAnswerFromContent(historyText, name);
+    // 2️⃣ All-time squad
+    content = await fetchCleanContent(LINKS.history);
+    answer = findLine(content, name);
 
-    if (foundHistory) {
-      return res.json({ reply: foundHistory });
-    }
+    if (answer) return res.json({ reply: answer });
 
-    // 3️⃣ FINAL fallback → redirect
+    // 3️⃣ Redirect
     return res.json({
-      reply: `I could not find a confirmed answer directly.
-You can verify the full historical records here:
+      reply: `I couldn’t find a confirmed record for ${name}.
+You can verify the full Mohun Bagan squad history here:
 ${LINKS.history}`
     });
   }
 
   /* ===============================
-     SENIOR SQUAD / CAPTAIN
+     SENIOR SQUAD
   ================================ */
 
-  if (q.includes("senior squad") || q.includes("complete squad") || q.includes("captain")) {
-    const hiddenText = await fetchPageText(LINKS.hidden);
-    const answer = tryAnswerFromContent(hiddenText, "squad");
+  if (q.includes("senior squad") || q.includes("complete squad")) {
+    const content = await fetchCleanContent(LINKS.hidden);
 
-    if (answer) {
-      return res.json({ reply: hiddenText });
-    }
+    if (content) return res.json({ reply: content });
 
     return res.json({
       reply: `You can view the official current senior squad here:
@@ -132,32 +148,32 @@ ${LINKS.current}`
   ================================ */
 
   if (q.includes("reserve")) {
-    const t = await fetchPageText(LINKS.reserves);
-    return res.json({ reply: t || LINKS.reserves });
+    const content = await fetchCleanContent(LINKS.reserves);
+    return res.json({ reply: content || LINKS.reserves });
   }
 
   if (q.includes("u18")) {
-    const t = await fetchPageText(LINKS.u18);
-    return res.json({ reply: t || LINKS.u18 });
+    const content = await fetchCleanContent(LINKS.u18);
+    return res.json({ reply: content || LINKS.u18 });
   }
 
   if (q.includes("u16")) {
-    const t = await fetchPageText(LINKS.u16);
-    return res.json({ reply: t || LINKS.u16 });
+    const content = await fetchCleanContent(LINKS.u16);
+    return res.json({ reply: content || LINKS.u16 });
   }
 
   if (q.includes("u14")) {
-    const t = await fetchPageText(LINKS.u14);
-    return res.json({ reply: t || LINKS.u14 });
+    const content = await fetchCleanContent(LINKS.u14);
+    return res.json({ reply: content || LINKS.u14 });
   }
 
   /* ===============================
-     MATCHES / TABLE
+     MATCHES / FIXTURES
   ================================ */
 
   if (q.includes("match") || q.includes("fixture") || q.includes("table")) {
-    const t = await fetchPageText(LINKS.matches);
-    return res.json({ reply: t || LINKS.matches });
+    const content = await fetchCleanContent(LINKS.matches);
+    return res.json({ reply: content || LINKS.matches });
   }
 
   /* ===============================
@@ -165,8 +181,8 @@ ${LINKS.current}`
   ================================ */
 
   if (q.includes("trophy") || q.includes("titles")) {
-    const t = await fetchPageText(LINKS.trophies);
-    return res.json({ reply: t || LINKS.trophies });
+    const content = await fetchCleanContent(LINKS.trophies);
+    return res.json({ reply: content || LINKS.trophies });
   }
 
   /* ===============================
@@ -174,9 +190,9 @@ ${LINKS.current}`
   ================================ */
 
   if (q.includes("latest") || q.includes("news")) {
-    const t = await fetchPageText(LINKS.latest);
     return res.json({
-      reply: t || `Check latest Mohun Bagan updates here:\n${LINKS.latest}`
+      reply: `For the latest Mohun Bagan updates, visit:
+${LINKS.latest}`
     });
   }
 
@@ -185,7 +201,7 @@ ${LINKS.current}`
   ================================ */
 
   return res.json({
-    reply: "Please rephrase your question related to Mohun Bagan."
+    reply: "Please ask something related to Mohun Bagan."
   });
 });
 
@@ -194,7 +210,7 @@ ${LINKS.current}`
 ================================ */
 
 app.get("/", (_, res) => {
-  res.send("Mr. MBFT backend running with SMART FETCH → REDIRECT logic");
+  res.send("Mr. MBFT backend running – clean fetch + smart redirect enabled");
 });
 
 const PORT = process.env.PORT || 10000;
