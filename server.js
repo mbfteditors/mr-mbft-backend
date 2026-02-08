@@ -1,15 +1,16 @@
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
+import cheerio from "cheerio";
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-/* ==================================================
-   LIVE MBFT SOURCES (SINGLE SOURCE OF TRUTH)
-   ================================================== */
+/* =====================================
+   LIVE MBFT SOURCES (TRUSTED)
+   ===================================== */
 
 const LIVE_SOURCES = {
   squadHistory: "https://www.mbft.in/2024/01/Mohun-Bagan-Squad-Over-The-Years.html",
@@ -21,12 +22,16 @@ const LIVE_SOURCES = {
   matches: "https://www.mbft.in/p/matches.html"
 };
 
-/* ==================================================
-   SIMPLE IN-MEMORY CACHE (10 MINUTES)
-   ================================================== */
+/* =====================================
+   CACHE (10 MINUTES)
+   ===================================== */
 
 const CACHE = {};
 const CACHE_TTL = 10 * 60 * 1000;
+
+/* =====================================
+   FETCH + DOM EXTRACTION (BULLETPROOF)
+   ===================================== */
 
 async function fetchWithCache(key, url) {
   const now = Date.now();
@@ -35,101 +40,77 @@ async function fetchWithCache(key, url) {
     return CACHE[key].content;
   }
 
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: { "User-Agent": "Mr-MBFT-Bot/1.0" }
+  });
+
   const html = await response.text();
+  const $ = cheerio.load(html);
 
-  let extracted = "";
+  let text = "";
 
-  // Try common Blogger content containers
-  const selectors = [
-    /<div class="post-body[^"]*">([\s\S]*?)<\/div>/i,
-    /<div class="entry-content[^"]*">([\s\S]*?)<\/div>/i,
-    /<div class="page-body[^"]*">([\s\S]*?)<\/div>/i,
-    /<div class="widget-content[^"]*">([\s\S]*?)<\/div>/i
-  ];
-
-  for (const regex of selectors) {
-    const match = html.match(regex);
-    if (match && match[1]) {
-      extracted = match[1];
-      break;
+  // 1️⃣ Extract normal readable content
+  $(".post-body, .entry-content, .page, .widget-content, article").each(
+    (_, el) => {
+      text += " " + $(el).clone().find("script,style").remove().end().text();
     }
-  }
+  );
 
-  // Fallback if nothing matched
-  if (!extracted) {
-    extracted = html;
-  }
+  // 2️⃣ Extract table-based data (CRITICAL FOR SQUADS)
+  $("table tr").each((_, row) => {
+    const cells = [];
+    $(row)
+      .find("th, td")
+      .each((_, cell) => {
+        const cellText = $(cell).text().trim();
+        if (cellText) cells.push(cellText);
+      });
+    if (cells.length) {
+      text += " " + cells.join(" | ");
+    }
+  });
 
-  const cleanedText = extracted
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "")
-    .replace(/<[^>]+>/g, " ")
+  // 3️⃣ Cleanup
+  text = text
     .replace(/\s+/g, " ")
+    .replace(/\| \|/g, "|")
     .trim()
-    .slice(0, 25000);
+    .slice(0, 50000);
 
   CACHE[key] = {
     time: now,
-    content: cleanedText
+    content: text
   };
 
-  return cleanedText;
+  return text;
 }
 
-/* ==================================================
-   INTENT DETECTION (ROBUST & SAFE)
-   ================================================== */
+/* =====================================
+   INTENT DETECTION (DOMAIN-AWARE)
+   ===================================== */
 
 function detectIntent(question) {
   if (!question) return null;
-
   const q = question.toLowerCase();
 
-  // Squad history
-  if (
-    q.includes("over the years") ||
-    q.includes("history squad") ||
-    q.includes("past squad")
-  ) {
+  if (q.includes("over the years") || q.includes("history")) {
     return "squadHistory";
   }
 
-  // Youth & reserve squads
   if (q.includes("u18")) return "u18";
   if (q.includes("u16")) return "u16";
   if (q.includes("u14")) return "u14";
   if (q.includes("reserve")) return "reserves";
 
-  // Matches
-  if (
-    q.includes("match") ||
-    q.includes("fixture") ||
-    q.includes("schedule")
-  ) {
+  if (q.includes("match") || q.includes("fixture") || q.includes("schedule")) {
     return "matches";
   }
 
-  // Explicit senior squad
   if (
-    q.includes("current squad") ||
-    q.includes("senior squad") ||
-    q.includes("team list") ||
-    q.includes("player list")
-  ) {
-    return "seniorSquad";
-  }
-
-  // Default: Mohun Bagan + players/team/squad
-  if (
-    q.includes("mohun bagan") &&
-    (
-      q.includes("player") ||
-      q.includes("team") ||
-      q.includes("squad") ||
-      q.includes("who are")
-    )
+    q.includes("player") ||
+    q.includes("team") ||
+    q.includes("squad") ||
+    q.includes("who are")
   ) {
     return "seniorSquad";
   }
@@ -137,12 +118,12 @@ function detectIntent(question) {
   return null;
 }
 
-/* ==================================================
+/* =====================================
    CHAT ENDPOINT
-   ================================================== */
+   ===================================== */
 
 app.post("/chat", async (req, res) => {
-  const message = req.body.message;
+  const message = req.body?.message || "";
 
   const intent = detectIntent(message);
 
@@ -153,17 +134,20 @@ app.post("/chat", async (req, res) => {
   }
 
   try {
-    const liveContent = await fetchWithCache(
-      intent,
-      LIVE_SOURCES[intent]
-    );
+    const content = await fetchWithCache(intent, LIVE_SOURCES[intent]);
 
-    const openaiResponse = await fetch(
+    if (!content || content.length < 300) {
+      return res.json({
+        reply: "I don’t have verified information on this yet."
+      });
+    }
+
+    const aiResponse = await fetch(
       "https://api.openai.com/v1/chat/completions",
       {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -173,58 +157,53 @@ app.post("/chat", async (req, res) => {
             {
               role: "system",
               content: `
-You are Mr. MBFT, the official AI assistant of MBFT.in.
+You are Mr. MBFT, the official AI of MBFT.in.
 
 STRICT RULES:
-- Answer ONLY using the content below.
+- Use ONLY the content below.
 - Do NOT guess.
-- Do NOT add external information.
-- If information is missing, say exactly:
+- Do NOT add extra knowledge.
+- If information is missing, reply exactly:
 "I don’t have verified information on this yet."
 
 CONTENT:
-${liveContent}
+${content}
               `
             },
-            {
-              role: "user",
-              content: message
-            }
+            { role: "user", content: message }
           ]
         })
       }
     );
 
-    const data = await openaiResponse.json();
+    const data = await aiResponse.json();
 
     return res.json({
       reply:
         data?.choices?.[0]?.message?.content ||
         "I don’t have verified information on this yet."
     });
-
-  } catch (error) {
+  } catch (err) {
     return res.json({
       reply: "I don’t have verified information on this yet."
     });
   }
 });
 
-/* ==================================================
+/* =====================================
    HEALTH CHECK
-   ================================================== */
+   ===================================== */
 
-app.get("/", (req, res) => {
-  res.send("Mr. MBFT backend running – Live fetch + cache active");
+app.get("/", (_, res) => {
+  res.send("Mr. MBFT backend running – DOM + table extraction active");
 });
 
-/* ==================================================
+/* =====================================
    START SERVER
-   ================================================== */
+   ===================================== */
 
 const PORT = process.env.PORT || 10000;
 
 app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
+  console.log("Server running on port", PORT);
 });
-
