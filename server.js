@@ -9,38 +9,34 @@ app.use(cors());
 app.use(express.json());
 
 /* =====================================
-   LIVE MBFT SOURCES
+   SINGLE SOURCE OF TRUTH (MBFT DATA PAGE)
    ===================================== */
 
-const LIVE_SOURCES = {
-  squadHistory: "https://www.mbft.in/2024/01/Mohun-Bagan-Squad-Over-The-Years.html",
-  seniorSquad: "https://www.mbft.in/p/mohun-bagan-squad.html",
-  reserves: "https://www.mbft.in/p/mohun-bagan-squad-2.html",
-  u18: "https://www.mbft.in/p/mohun-bagan-squad-3.html",
-  u16: "https://www.mbft.in/p/mohun-bagan-squad-4.html",
-  u14: "https://www.mbft.in/p/mohun-bagan-squad-5.html",
-  matches: "https://www.mbft.in/p/matches.html"
-};
+const MBFT_DATA_URL = "https://www.mbft.in/p/mr-mbft-data.html";
 
 /* =====================================
-   CACHE (10 MINUTES)
+   SIMPLE CACHE (10 MINUTES)
    ===================================== */
 
-const CACHE = {};
+let CACHE = {
+  time: 0,
+  content: ""
+};
+
 const CACHE_TTL = 10 * 60 * 1000;
 
 /* =====================================
-   FETCH + DOM EXTRACTION (SAFE)
+   FETCH & PARSE MBFT DATA PAGE
    ===================================== */
 
-async function fetchWithCache(key, url) {
+async function fetchMBFTData() {
   const now = Date.now();
 
-  if (CACHE[key] && now - CACHE[key].time < CACHE_TTL) {
-    return CACHE[key].content;
+  if (CACHE.content && now - CACHE.time < CACHE_TTL) {
+    return CACHE.content;
   }
 
-  const response = await fetch(url, {
+  const response = await fetch(MBFT_DATA_URL, {
     headers: { "User-Agent": "Mr-MBFT-Bot/1.0" }
   });
 
@@ -49,22 +45,18 @@ async function fetchWithCache(key, url) {
 
   let text = "";
 
-  // Main content
-  $(".post-body, .entry-content, .page, .widget-content, article").each(
-    (_, el) => {
-      text += " " + $(el).clone().find("script,style").remove().end().text();
-    }
-  );
+  // Extract readable content
+  $("body").each((_, el) => {
+    text += " " + $(el).clone().find("script,style,noscript").remove().end().text();
+  });
 
-  // Tables (critical for squads)
+  // Extract table content explicitly (if any)
   $("table tr").each((_, row) => {
     const cells = [];
-    $(row)
-      .find("th, td")
-      .each((_, cell) => {
-        const cellText = $(cell).text().trim();
-        if (cellText) cells.push(cellText);
-      });
+    $(row).find("th, td").each((_, cell) => {
+      const cellText = $(cell).text().trim();
+      if (cellText) cells.push(cellText);
+    });
     if (cells.length) {
       text += " " + cells.join(" | ");
     }
@@ -75,7 +67,7 @@ async function fetchWithCache(key, url) {
     .trim()
     .slice(0, 50000);
 
-  CACHE[key] = {
+  CACHE = {
     time: now,
     content: text
   };
@@ -84,48 +76,28 @@ async function fetchWithCache(key, url) {
 }
 
 /* =====================================
-   INTENT DETECTION
-   ===================================== */
-
-function detectIntent(question) {
-  if (!question) return null;
-  const q = question.toLowerCase();
-
-  if (q.includes("over the years") || q.includes("history")) return "squadHistory";
-  if (q.includes("u18")) return "u18";
-  if (q.includes("u16")) return "u16";
-  if (q.includes("u14")) return "u14";
-  if (q.includes("reserve")) return "reserves";
-  if (q.includes("match") || q.includes("fixture") || q.includes("schedule")) return "matches";
-
-  if (
-    q.includes("player") ||
-    q.includes("team") ||
-    q.includes("squad") ||
-    q.includes("who are")
-  ) {
-    return "seniorSquad";
-  }
-
-  return null;
-}
-
-/* =====================================
    CHAT ENDPOINT
    ===================================== */
 
 app.post("/chat", async (req, res) => {
   const message = req.body?.message || "";
-  const intent = detectIntent(message);
 
-  if (!intent || !LIVE_SOURCES[intent]) {
+  // If question is not about Mohun Bagan / squads, refuse safely
+  const q = message.toLowerCase();
+  if (
+    !q.includes("mohun bagan") &&
+    !q.includes("squad") &&
+    !q.includes("player") &&
+    !q.includes("team") &&
+    !q.includes("match")
+  ) {
     return res.json({
       reply: "I don’t have verified information on this yet."
     });
   }
 
   try {
-    const content = await fetchWithCache(intent, LIVE_SOURCES[intent]);
+    const content = await fetchMBFTData();
 
     if (!content || content.length < 300) {
       return res.json({
@@ -133,7 +105,7 @@ app.post("/chat", async (req, res) => {
       });
     }
 
-    const aiResponse = await fetch(
+    const openaiResponse = await fetch(
       "https://api.openai.com/v1/chat/completions",
       {
         method: "POST",
@@ -148,25 +120,29 @@ app.post("/chat", async (req, res) => {
             {
               role: "system",
               content: `
-You are Mr. MBFT, the official AI of MBFT.in.
+You are Mr. MBFT, the official AI assistant of MBFT.in.
 
-RULES:
+STRICT RULES:
 - Answer ONLY using the content below.
 - Do NOT guess.
-- If information is missing, say:
+- Do NOT add information.
+- If the answer is not present, say exactly:
 "I don’t have verified information on this yet."
 
 CONTENT:
 ${content}
               `
             },
-            { role: "user", content: message }
+            {
+              role: "user",
+              content: message
+            }
           ]
         })
       }
     );
 
-    const data = await aiResponse.json();
+    const data = await openaiResponse.json();
 
     return res.json({
       reply:
@@ -174,7 +150,7 @@ ${content}
         "I don’t have verified information on this yet."
     });
 
-  } catch {
+  } catch (error) {
     return res.json({
       reply: "I don’t have verified information on this yet."
     });
@@ -186,7 +162,7 @@ ${content}
    ===================================== */
 
 app.get("/", (_, res) => {
-  res.send("Mr. MBFT backend running – DOM + table extraction active");
+  res.send("Mr. MBFT backend running – Hidden MBFT Data Page mode");
 });
 
 /* =====================================
