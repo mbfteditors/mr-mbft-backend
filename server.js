@@ -62,7 +62,7 @@ function detectIntent(question) {
   if (!question) return null;
   const q = question.toLowerCase();
 
-  // Squad over the years
+  // Explicit historical squad
   if (
     q.includes("over the years") ||
     q.includes("historical squad") ||
@@ -70,6 +70,49 @@ function detectIntent(question) {
   ) {
     return "squadHistory";
   }
+
+  // Youth & reserves
+  if (q.includes("u18")) return "u18";
+  if (q.includes("u16")) return "u16";
+  if (q.includes("u14")) return "u14";
+  if (q.includes("reserve")) return "reserves";
+
+  // Match schedule
+  if (
+    q.includes("match") ||
+    q.includes("fixture") ||
+    q.includes("schedule")
+  ) {
+    return "matches";
+  }
+
+  // Senior squad (explicit)
+  if (
+    q.includes("current squad") ||
+    q.includes("senior squad") ||
+    q.includes("team list") ||
+    q.includes("player list")
+  ) {
+    return "seniorSquad";
+  }
+
+  // 🔑 FINAL FALLBACK:
+  // Any Mohun Bagan player/team question defaults to senior squad
+  if (
+    q.includes("mohun bagan") &&
+    (
+      q.includes("player") ||
+      q.includes("team") ||
+      q.includes("squad") ||
+      q.includes("who are")
+    )
+  ) {
+    return "seniorSquad";
+  }
+
+  return null;
+}
+
 
   // Youth squads
   if (q.includes("u18")) return "u18";
