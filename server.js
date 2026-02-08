@@ -4,173 +4,200 @@ import fetch from "node-fetch";
 import * as cheerio from "cheerio";
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
-/* =====================================
-   SINGLE SOURCE OF TRUTH (MBFT DATA PAGE)
-   ===================================== */
+/* ===============================
+   ALL MBFT LINKS
+================================ */
 
-const MBFT_DATA_URL = "https://www.mbft.in/p/mr-mbft-data.html";
-
-/* =====================================
-   SIMPLE CACHE (10 MINUTES)
-   ===================================== */
-
-let CACHE = {
-  time: 0,
-  content: ""
+const LINKS = {
+  hidden: "https://www.mbft.in/p/mr-mbft-data.html",
+  history: "https://www.mbft.in/2024/01/Mohun-Bagan-Squad-Over-The-Years.html",
+  current: "https://www.mbft.in/p/mohun-bagan-squad.html",
+  reserves: "https://www.mbft.in/p/mohun-bagan-squad-2.html",
+  u18: "https://www.mbft.in/p/mohun-bagan-squad-3.html",
+  u16: "https://www.mbft.in/p/mohun-bagan-squad-4.html",
+  u14: "https://www.mbft.in/p/mohun-bagan-squad-5.html",
+  matches: "https://www.mbft.in/p/mohun-bagan-matches.html",
+  trophies: "https://www.mbft.in/2023/07/mohun-bagan-trophy-cabinet.html",
+  latest: "https://www.mbft.in"
 };
 
-const CACHE_TTL = 10 * 60 * 1000;
+/* ===============================
+   SIMPLE FETCH + CLEAN TEXT
+================================ */
 
-/* =====================================
-   FETCH & PARSE MBFT DATA PAGE
-   ===================================== */
-
-async function fetchMBFTData() {
-  const now = Date.now();
-
-  if (CACHE.content && now - CACHE.time < CACHE_TTL) {
-    return CACHE.content;
-  }
-
-  const response = await fetch(MBFT_DATA_URL, {
-    headers: { "User-Agent": "Mr-MBFT-Bot/1.0" }
-  });
-
-  const html = await response.text();
+async function fetchPageText(url) {
+  const res = await fetch(url);
+  const html = await res.text();
   const $ = cheerio.load(html);
-
-  let text = "";
-
-  // Extract readable content
-  $("body").each((_, el) => {
-    text += " " + $(el).clone().find("script,style,noscript").remove().end().text();
-  });
-
-  // Extract table content explicitly (if any)
-  $("table tr").each((_, row) => {
-    const cells = [];
-    $(row).find("th, td").each((_, cell) => {
-      const cellText = $(cell).text().trim();
-      if (cellText) cells.push(cellText);
-    });
-    if (cells.length) {
-      text += " " + cells.join(" | ");
-    }
-  });
-
-  text = text
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 50000);
-
-  CACHE = {
-    time: now,
-    content: text
-  };
-
-  return text;
+  return $("body").text().replace(/\s+/g, " ").trim();
 }
 
-/* =====================================
+/* ===============================
+   TRY ANSWERING FROM A PAGE
+================================ */
+
+function tryAnswerFromContent(content, query) {
+  const q = query.toLowerCase();
+  const sentences = content.split(".");
+
+  for (const s of sentences) {
+    if (s.toLowerCase().includes(q)) {
+      return s.trim() + ".";
+    }
+  }
+  return null;
+}
+
+/* ===============================
    CHAT ENDPOINT
-   ===================================== */
+================================ */
 
 app.post("/chat", async (req, res) => {
-  const message = req.body?.message || "";
-
-  // If question is not about Mohun Bagan / squads, refuse safely
+  const message = (req.body?.message || "").trim();
   const q = message.toLowerCase();
-  if (
-    !q.includes("mohun bagan") &&
-    !q.includes("squad") &&
-    !q.includes("player") &&
-    !q.includes("team") &&
-    !q.includes("match")
-  ) {
+
+  /* 🔴 EAST BENGAL RULE */
+  if (q.includes("east bengal")) {
     return res.json({
-      reply: "I don’t have verified information on this yet."
+      reply: "We don't talk about irrelevant East Bengal here, JOY MOHUN BAGAN 🟢🔴"
     });
   }
 
-  try {
-    const content = await fetchMBFTData();
+  /* 😏 ATK RULE */
+  if (q.includes("atk")) {
+    return res.json({
+      reply: "It's 2026 and you are still stuck in 2020 😏"
+    });
+  }
 
-    if (!content || content.length < 300) {
-      return res.json({
-        reply: "I don’t have verified information on this yet."
-      });
+  /* ===============================
+     PLAYER QUESTIONS
+  ================================ */
+
+  const whoMatch =
+    message.match(/who is (.+)/i) ||
+    message.match(/did (.+) play/i) ||
+    message.match(/has (.+) ever played/i);
+
+  if (whoMatch) {
+    const name = whoMatch[1].replace("for mohun bagan", "").trim();
+
+    // 1️⃣ Try hidden page first
+    const hiddenText = await fetchPageText(LINKS.hidden);
+    const foundHidden = tryAnswerFromContent(hiddenText, name);
+
+    if (foundHidden) {
+      return res.json({ reply: foundHidden });
     }
 
-    const openaiResponse = await fetch(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "gpt-3.5-turbo",
-          temperature: 0,
-          messages: [
-            {
-              role: "system",
-              content: `
-You are Mr. MBFT, the official AI assistant of MBFT.in.
+    // 2️⃣ Try all-time squad page
+    const historyText = await fetchPageText(LINKS.history);
+    const foundHistory = tryAnswerFromContent(historyText, name);
 
-STRICT RULES:
-- Answer ONLY using the content below.
-- Do NOT guess.
-- Do NOT add information.
-- If the answer is not present, say exactly:
-"I don’t have verified information on this yet."
+    if (foundHistory) {
+      return res.json({ reply: foundHistory });
+    }
 
-CONTENT:
-${content}
-              `
-            },
-            {
-              role: "user",
-              content: message
-            }
-          ]
-        })
-      }
-    );
-
-    const data = await openaiResponse.json();
-
+    // 3️⃣ FINAL fallback → redirect
     return res.json({
-      reply:
-        data?.choices?.[0]?.message?.content ||
-        "I don’t have verified information on this yet."
-    });
-
-  } catch (error) {
-    return res.json({
-      reply: "I don’t have verified information on this yet."
+      reply: `I could not find a confirmed answer directly.
+You can verify the full historical records here:
+${LINKS.history}`
     });
   }
+
+  /* ===============================
+     SENIOR SQUAD / CAPTAIN
+  ================================ */
+
+  if (q.includes("senior squad") || q.includes("complete squad") || q.includes("captain")) {
+    const hiddenText = await fetchPageText(LINKS.hidden);
+    const answer = tryAnswerFromContent(hiddenText, "squad");
+
+    if (answer) {
+      return res.json({ reply: hiddenText });
+    }
+
+    return res.json({
+      reply: `You can view the official current senior squad here:
+${LINKS.current}`
+    });
+  }
+
+  /* ===============================
+     YOUTH & RESERVES
+  ================================ */
+
+  if (q.includes("reserve")) {
+    const t = await fetchPageText(LINKS.reserves);
+    return res.json({ reply: t || LINKS.reserves });
+  }
+
+  if (q.includes("u18")) {
+    const t = await fetchPageText(LINKS.u18);
+    return res.json({ reply: t || LINKS.u18 });
+  }
+
+  if (q.includes("u16")) {
+    const t = await fetchPageText(LINKS.u16);
+    return res.json({ reply: t || LINKS.u16 });
+  }
+
+  if (q.includes("u14")) {
+    const t = await fetchPageText(LINKS.u14);
+    return res.json({ reply: t || LINKS.u14 });
+  }
+
+  /* ===============================
+     MATCHES / TABLE
+  ================================ */
+
+  if (q.includes("match") || q.includes("fixture") || q.includes("table")) {
+    const t = await fetchPageText(LINKS.matches);
+    return res.json({ reply: t || LINKS.matches });
+  }
+
+  /* ===============================
+     TROPHIES
+  ================================ */
+
+  if (q.includes("trophy") || q.includes("titles")) {
+    const t = await fetchPageText(LINKS.trophies);
+    return res.json({ reply: t || LINKS.trophies });
+  }
+
+  /* ===============================
+     LATEST NEWS
+  ================================ */
+
+  if (q.includes("latest") || q.includes("news")) {
+    const t = await fetchPageText(LINKS.latest);
+    return res.json({
+      reply: t || `Check latest Mohun Bagan updates here:\n${LINKS.latest}`
+    });
+  }
+
+  /* ===============================
+     FINAL FALLBACK
+  ================================ */
+
+  return res.json({
+    reply: "Please rephrase your question related to Mohun Bagan."
+  });
 });
 
-/* =====================================
+/* ===============================
    HEALTH CHECK
-   ===================================== */
+================================ */
 
 app.get("/", (_, res) => {
-  res.send("Mr. MBFT backend running – Hidden MBFT Data Page mode");
+  res.send("Mr. MBFT backend running with SMART FETCH → REDIRECT logic");
 });
 
-/* =====================================
-   START SERVER
-   ===================================== */
-
 const PORT = process.env.PORT || 10000;
-
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
