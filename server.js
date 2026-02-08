@@ -62,16 +62,43 @@ function detectIntent(question) {
   if (!question) return null;
   const q = question.toLowerCase();
 
-  if (q.includes("over the years") || q.includes("history squad")) return "squadHistory";
-  if (q.includes("current squad") || q.includes("senior squad")) return "seniorSquad";
-  if (q.includes("reserve")) return "reserves";
+  // Squad over the years
+  if (
+    q.includes("over the years") ||
+    q.includes("historical squad") ||
+    q.includes("past squad")
+  ) {
+    return "squadHistory";
+  }
+
+  // Youth squads
   if (q.includes("u18")) return "u18";
   if (q.includes("u16")) return "u16";
   if (q.includes("u14")) return "u14";
-  if (q.includes("match") || q.includes("fixture") || q.includes("schedule")) return "matches";
+  if (q.includes("reserve")) return "reserves";
+
+  // Current / senior squad (DEFAULT)
+  if (
+    q.includes("squad") ||
+    q.includes("team") ||
+    q.includes("players") ||
+    q.includes("current")
+  ) {
+    return "seniorSquad";
+  }
+
+  // Matches
+  if (
+    q.includes("match") ||
+    q.includes("fixture") ||
+    q.includes("schedule")
+  ) {
+    return "matches";
+  }
 
   return null;
 }
+
 
 /* ===============================
    CHAT ENDPOINT
