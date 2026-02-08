@@ -38,25 +38,37 @@ async function fetchWithCache(key, url) {
   const response = await fetch(url);
   const html = await response.text();
 
-  // Extract main article content (Blogger safe)
-  let mainContent = "";
+  let extracted = "";
 
-  const articleMatch = html.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+  // Try common Blogger content containers
+  const selectors = [
+    /<div class="post-body[^"]*">([\s\S]*?)<\/div>/i,
+    /<div class="entry-content[^"]*">([\s\S]*?)<\/div>/i,
+    /<div class="page-body[^"]*">([\s\S]*?)<\/div>/i,
+    /<div class="widget-content[^"]*">([\s\S]*?)<\/div>/i
+  ];
 
-  if (articleMatch && articleMatch[1]) {
-    mainContent = articleMatch[1];
-  } else {
-    mainContent = html; // fallback
+  for (const regex of selectors) {
+    const match = html.match(regex);
+    if (match && match[1]) {
+      extracted = match[1];
+      break;
+    }
   }
 
-  const cleanedText = mainContent
+  // Fallback if nothing matched
+  if (!extracted) {
+    extracted = html;
+  }
+
+  const cleanedText = extracted
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
     .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 20000); // slightly higher for squads
+    .slice(0, 25000);
 
   CACHE[key] = {
     time: now,
