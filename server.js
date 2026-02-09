@@ -1,220 +1,113 @@
 import express from "express";
 import cors from "cors";
-import fetch from "node-fetch";
-import * as cheerio from "cheerio";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 /* ===============================
-   MBFT LINKS
+   BASIC KNOWLEDGE (VERY LIMITED)
 ================================ */
 
-const LINKS = {
-  current: "https://www.mbft.in/p/mohun-bagan-squad.html",
-  history: "https://www.mbft.in/2024/01/Mohun-Bagan-Squad-Over-The-Years.html",
-  reserves: "https://www.mbft.in/p/mohun-bagan-squad-2.html",
-  u18: "https://www.mbft.in/p/mohun-bagan-squad-3.html",
-  u16: "https://www.mbft.in/p/mohun-bagan-squad-4.html",
-  u14: "https://www.mbft.in/p/mohun-bagan-squad-5.html",
-  matches: "https://www.mbft.in/p/mohun-bagan-matches.html",
-  trophies: "https://www.mbft.in/2023/07/mohun-bagan-trophy-cabinet.html",
-  latest: "https://www.mbft.in"
+const BASIC_KNOWLEDGE = {
+  "what is mbft": "MBFT (Mariners' Beyond Field Talks) is a fan-driven digital platform dedicated to Mohun Bagan, covering news, history, squads, matches, and exclusive fan content.",
+  "what is mohun bagan": "Mohun Bagan Athletic Club, founded in 1889, is one of the oldest and most iconic football clubs in India.",
+  "who are you": "I am Mr. MBFT, your official MBFT Tour Guide 🟢🔴",
+  "what is mr mbft": "Mr. MBFT is an MBFT Tour Guide designed to help you find the right Mohun Bagan content on MBFT."
 };
 
 /* ===============================
-   SAFE TEXT EXTRACTOR (NO CSS)
+   MBFT ARTICLE MAP (THE HEART)
 ================================ */
 
-async function fetchCleanText(url) {
-  try {
-    const res = await fetch(url);
-    const html = await res.text();
-    const $ = cheerio.load(html);
-
-    // REMOVE ALL NON-CONTENT
-    $("style, script, noscript, header, footer").remove();
-
-    const container =
-      $(".post-body").first().clone() ||
-      $(".page-body").first().clone() ||
-      $(".entry-content").first().clone();
-
-    if (!container || container.length === 0) return "";
-
-    // REMOVE INLINE STYLE ELEMENTS
-    container.find("style, script").remove();
-
-    let text = container.text();
-
-    // FINAL SANITIZATION
-    text = text
-      .replace(/\/\*[\s\S]*?\*\//g, "") // CSS comments
-      .replace(/:\s*#[0-9a-fA-F]{3,6}/g, "")
-      .replace(/\{|\}/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    // HARD BLOCK CSS-LOOKING OUTPUT
-    const cssIndicators = [
-      "--",
-      "font-size",
-      "background",
-      "color:",
-      "padding",
-      "margin"
-    ];
-
-    if (cssIndicators.some(k => text.includes(k))) {
-      return "";
-    }
-
-    return text;
-  } catch {
-    return "";
+const LINKS = {
+  currentSquad: {
+    keywords: ["current squad", "senior squad", "team list", "players"],
+    url: "https://www.mbft.in/p/mohun-bagan-squad.html",
+    message: "Hello Mariner 🟢🔴\nPlease visit the link below to check our current Mohun Bagan squad:"
+  },
+  squadHistory: {
+    keywords: ["over the years", "past players", "did", "ever played"],
+    url: "https://www.mbft.in/2024/01/Mohun-Bagan-Squad-Over-The-Years.html",
+    message: "You can verify Mohun Bagan’s squad history here:"
+  },
+  reserves: {
+    keywords: ["reserve"],
+    url: "https://www.mbft.in/p/mohun-bagan-squad-2.html",
+    message: "Please visit the link below to check the Mohun Bagan Reserves squad:"
+  },
+  u18: {
+    keywords: ["u18"],
+    url: "https://www.mbft.in/p/mohun-bagan-squad-3.html",
+    message: "Please visit the link below to check the Mohun Bagan U18 squad:"
+  },
+  u16: {
+    keywords: ["u16"],
+    url: "https://www.mbft.in/p/mohun-bagan-squad-4.html",
+    message: "Please visit the link below to check the Mohun Bagan U16 squad:"
+  },
+  u14: {
+    keywords: ["u14"],
+    url: "https://www.mbft.in/p/mohun-bagan-squad-5.html",
+    message: "Please visit the link below to check the Mohun Bagan U14 squad:"
+  },
+  matches: {
+    keywords: ["match", "fixture", "schedule", "table"],
+    url: "https://www.mbft.in/p/mohun-bagan-matches.html",
+    message: "You can find the latest Mohun Bagan matches and schedule here:"
+  },
+  trophies: {
+    keywords: ["trophy", "trophies", "titles"],
+    url: "https://www.mbft.in/p/trophy-cabinet.html",
+    message: "Mohun Bagan have won 261 Official trophies, which include 7 League and 14 Cup Titles. Please visit the link below to explore Mohun Bagan’s trophy cabinet:"
+  },
+  latest: {
+    keywords: ["latest", "news", "update"],
+    url: "https://www.mbft.in",
+    message: "Hi, You are at the best place for the latest Mohun Bagan news and updates, visit:"
   }
-}
-
-/* ===============================
-   FIND SINGLE SENTENCE
-================================ */
-
-function findSentence(text, keyword) {
-  const sentences = text.split(".");
-  for (const s of sentences) {
-    if (s.toLowerCase().includes(keyword.toLowerCase())) {
-      return s.trim() + ".";
-    }
-  }
-  return null;
-}
+};
 
 /* ===============================
    CHAT ENDPOINT
 ================================ */
 
-app.post("/chat", async (req, res) => {
-  const message = (req.body?.message || "").trim();
-  const q = message.toLowerCase();
+app.post("/chat", (req, res) => {
+  const message = (req.body.message || "").toLowerCase();
 
   /* ATTITUDE RULES */
-  if (q.includes("east bengal")) {
+  if (message.includes("east bengal")) {
     return res.json({
       reply: "We don't talk about irrelevant East Bengal here, JOY MOHUN BAGAN 🟢🔴"
     });
   }
 
-  if (q.includes("atk")) {
+  if (message.includes("atk")) {
     return res.json({
       reply: "It's 2026 and you are still stuck in 2020 😏"
     });
   }
 
-  /* ===============================
-     PLAYER QUESTIONS
-  =============================== */
+  /* BASIC KNOWLEDGE */
+  for (const key in BASIC_KNOWLEDGE) {
+    if (message.includes(key)) {
+      return res.json({ reply: BASIC_KNOWLEDGE[key] });
+    }
+  }
 
-  const whoMatch =
-    message.match(/who is (.+)/i) ||
-    message.match(/did (.+) play/i) ||
-    message.match(/has (.+) ever played/i);
-
-  if (whoMatch) {
-    const name = whoMatch[1].replace("for mohun bagan", "").trim();
-
-    // Try current squad
-    let text = await fetchCleanText(LINKS.current);
-    let found = findSentence(text, name);
-
-    if (found) {
+  /* ARTICLE REDIRECT LOGIC */
+  for (const section in LINKS) {
+    const { keywords, url, message: replyText } = LINKS[section];
+    if (keywords.some(k => message.includes(k))) {
       return res.json({
-        reply: `Yes. ${found}`
+        reply: `${replyText}\n${url}`
       });
     }
-
-    // Try history
-    text = await fetchCleanText(LINKS.history);
-    found = findSentence(text, name);
-
-    if (found) {
-      return res.json({
-        reply: `Yes. ${found}`
-      });
-    }
-
-    return res.json({
-      reply: `I couldn’t find a confirmed answer.
-You can check the complete Mohun Bagan squad history here:
-${LINKS.history}`
-    });
   }
 
-  /* ===============================
-     CURRENT SQUAD / CAPTAIN / COACH
-  =============================== */
-
-  if (
-    q.includes("current squad") ||
-    q.includes("senior squad") ||
-    q.includes("current team") ||
-    q.includes("captain") ||
-    q.includes("coach")
-  ) {
-    const text = await fetchCleanText(LINKS.current);
-
-    if (text) {
-      return res.json({ reply: text });
-    }
-
-    return res.json({
-      reply: `You can view the official Mohun Bagan senior squad here:
-${LINKS.current}`
-    });
-  }
-
-  /* ===============================
-     YOUTH & RESERVES
-  =============================== */
-
-  if (q.includes("reserve")) return res.json({ reply: LINKS.reserves });
-  if (q.includes("u18")) return res.json({ reply: LINKS.u18 });
-  if (q.includes("u16")) return res.json({ reply: LINKS.u16 });
-  if (q.includes("u14")) return res.json({ reply: LINKS.u14 });
-
-  /* ===============================
-     MATCHES
-  =============================== */
-
-  if (q.includes("match") || q.includes("fixture") || q.includes("table")) {
-    return res.json({ reply: LINKS.matches });
-  }
-
-  /* ===============================
-     TROPHIES
-  =============================== */
-
-  if (q.includes("trophy") || q.includes("titles")) {
-    return res.json({ reply: LINKS.trophies });
-  }
-
-  /* ===============================
-     LATEST NEWS
-  =============================== */
-
-  if (q.includes("latest") || q.includes("news")) {
-    return res.json({
-      reply: `For the latest Mohun Bagan updates, visit:
-${LINKS.latest}`
-    });
-  }
-
-  /* ===============================
-     SAFE FALLBACK
-  =============================== */
-
+  /* DEFAULT FALLBACK */
   return res.json({
-    reply: "Ask me anything related to Mohun Bagan – squad, players, matches, or history."
+    reply: "Hello Mariner 🟢🔴\nI can guide you to the right MBFT article. Try asking about squads, matches, trophies, or latest updates."
   });
 });
 
@@ -223,12 +116,8 @@ ${LINKS.latest}`
 ================================ */
 
 app.get("/", (_, res) => {
-  res.send("Mr. MBFT backend running – CSS-safe, answer-first mode");
+  res.send("Mr. MBFT Tour Guide backend running");
 });
-
-/* ===============================
-   START SERVER
-================================ */
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
